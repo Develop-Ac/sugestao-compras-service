@@ -32,18 +32,28 @@ echo "Host: ${SQL_SERVER_HOST}:${SQL_SERVER_PORT}"
 echo "Database: ${SQL_SERVER_DATABASE}"
 echo "User: ${SQL_SERVER_USER}"
 
-# Verificar se o driver SQL Server está disponível
-if ! odbcinst -q -d | grep -q "ODBC Driver 18 for SQL Server"; then
-    echo "ERRO: Driver ODBC 18 for SQL Server não encontrado!"
+# Verificar se algum driver SQL Server está disponível
+DRIVER_FOUND=""
+if odbcinst -q -d | grep -q "ODBC Driver 18 for SQL Server"; then
+    DRIVER_FOUND="ODBC Driver 18 for SQL Server"
+    echo "Driver ODBC 18 encontrado!"
+elif odbcinst -q -d | grep -q "ODBC Driver 17 for SQL Server"; then
+    DRIVER_FOUND="ODBC Driver 17 for SQL Server"
+    echo "Driver ODBC 17 encontrado!"
+else
+    echo "ERRO: Nenhum driver SQL Server encontrado!"
     echo "Drivers disponíveis:"
     odbcinst -q -d
-    exit 1
+    echo "Tentando continuar mesmo assim..."
+    DRIVER_FOUND="ODBC Driver 18 for SQL Server"
 fi
+
+echo "Usando driver: $DRIVER_FOUND"
 
 # Criar configuração ODBC para o SQL Server principal
 cat > /etc/odbc.ini << EOF
 [Default]
-Driver = ODBC Driver 18 for SQL Server
+Driver = $DRIVER_FOUND
 Server = ${SQL_SERVER_HOST},${SQL_SERVER_PORT}
 Database = ${SQL_SERVER_DATABASE}
 UID = ${SQL_SERVER_USER}
@@ -52,7 +62,7 @@ TrustServerCertificate = yes
 Encrypt = no
 
 [CONSULTA]
-Driver = ODBC Driver 18 for SQL Server
+Driver = $DRIVER_FOUND
 Server = ${SQL_SERVER_HOST},${SQL_SERVER_PORT}
 Database = ${SQL_SERVER_DATABASE}
 UID = ${SQL_SERVER_USER}
