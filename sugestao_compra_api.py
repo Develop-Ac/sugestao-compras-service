@@ -44,24 +44,24 @@ app = Flask(__name__)
 def get_connection():
     """Conecta ao SQL Server com tratamento de erro melhorado"""
     conn_str = (
-        f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-        f"SERVER={SQL_SERVER_HOST},{SQL_SERVER_PORT};"
+        f"DRIVER={{FreeTDS}};"
+        f"SERVER={SQL_SERVER_HOST};"
+        f"PORT={SQL_SERVER_PORT};"
         f"DATABASE={SQL_SERVER_DATABASE};"
         f"UID={SQL_SERVER_USER};"
         f"PWD={SQL_SERVER_PASSWORD};"
-        f"TrustServerCertificate=yes;"
-        f"Encrypt=no;"
+        f"TDS_Version=8.0;"
     )
     
     try:
         print(f"Tentando conectar com SQL Server: {SQL_SERVER_HOST}:{SQL_SERVER_PORT}")
         
         # Verificar se drivers estão disponíveis
-        drivers = [driver for driver in pyodbc.drivers() if 'sql server' in driver.lower()]
-        print(f"Drivers SQL Server disponíveis: {drivers}")
+        drivers = [driver for driver in pyodbc.drivers() if 'freetds' in driver.lower() or 'tds' in driver.lower()]
+        print(f"Drivers FreeTDS disponíveis: {drivers}")
         
         if not drivers:
-            print("ATENÇÃO: Nenhum driver SQL Server encontrado!")
+            print("ATENÇÃO: Nenhum driver FreeTDS encontrado!")
             print(f"Todos os drivers: {pyodbc.drivers()}")
         
         conn = pyodbc.connect(conn_str)
@@ -73,6 +73,7 @@ def get_connection():
         print(f"Host: {SQL_SERVER_HOST}:{SQL_SERVER_PORT}")
         print(f"Database: {SQL_SERVER_DATABASE}")
         print(f"User: {SQL_SERVER_USER}")
+        print(f"String de conexão: {conn_str.replace(SQL_SERVER_PASSWORD, '***')}")
         
         raise e
     except Exception as e:
@@ -394,7 +395,7 @@ def diagnostico():
     try:
         # Verificar drivers disponíveis
         all_drivers = pyodbc.drivers()
-        sql_server_drivers = [d for d in all_drivers if 'sql server' in d.lower()]
+        sql_server_drivers = [d for d in all_drivers if 'freetds' in d.lower() or 'tds' in d.lower()]
         diagnostico_result["sql_server"]["drivers"] = sql_server_drivers
         
         # Tentar conexão

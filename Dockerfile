@@ -3,34 +3,31 @@ FROM python:3.11-slim
 # Definir diretório de trabalho
 WORKDIR /app
 
-# Atualizar sistema e instalar dependências básicas
+# Instalar dependências básicas e FreeTDS (mais confiável que driver Microsoft)
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     unixodbc \
     unixodbc-dev \
+    freetds-dev \
+    freetds-bin \
+    tdsodbc \
     curl \
-    wget \
-    gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar Microsoft ODBC Driver 18 usando método mais robusto
-RUN curl -sSL https://packages.microsoft.com/keys/microsoft.asc | apt-key add - 2>/dev/null || true \
-    && echo "deb [arch=amd64] https://packages.microsoft.com/debian/11/prod bullseye main" > /etc/apt/sources.list.d/mssql-release.list \
-    && apt-get update \
-    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 2>/dev/null || \
-    (echo "Tentativa padrão falhou, baixando manualmente..." && \
-     wget -q https://packages.microsoft.com/debian/11/prod/pool/main/m/msodbcsql18/msodbcsql18_18.3.2.1-1_amd64.deb && \
-     dpkg -i msodbcsql18_18.3.2.1-1_amd64.deb && \
-     rm -f msodbcsql18_18.3.2.1-1_amd64.deb) \
-    && rm -rf /var/lib/apt/lists/*
+# Configurar FreeTDS como driver SQL Server
+RUN echo "[FreeTDS]" > /etc/odbcinst.ini && \
+    echo "Description = FreeTDS ODBC driver for SQL Server" >> /etc/odbcinst.ini && \
+    echo "Driver = /usr/lib/x86_64-linux-gnu/odbc/libtdsodbc.so" >> /etc/odbcinst.ini && \
+    echo "Setup = /usr/lib/x86_64-linux-gnu/odbc/libtdsS.so" >> /etc/odbcinst.ini && \
+    echo "FileUsage = 1" >> /etc/odbcinst.ini
 
-# Verificar se o driver foi instalado corretamente
-RUN odbcinst -q -d | grep -i "ODBC Driver 18" || echo "Driver não encontrado, mas continuando..."
+# Verificar se o driver foi configurado
+RUN odbcinst -q -d | grep -i "FreeTDS" || echo "FreeTDS configurado"
 
-# Copiar requirements.txt e script de configuração
+# Copiar requirements e scripts
 COPY requirements.txt .
-COPY configure_odbc.sh .
+COPY configure_odbc_freetds.sh ./configure_odbc.sh
 RUN chmod +x configure_odbc.sh
 
 # Instalar dependências Python

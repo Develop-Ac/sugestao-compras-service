@@ -1,7 +1,7 @@
 # Script de Deploy para API Sugestão de Compra
-# Execute este script após configurar as variáveis no docker-compose.yml
+# Execute este script após verificar as configurações no docker-compose.yml
 
-Write-Host "=== Deploy API Sugestão de Compra ===" -ForegroundColor Green
+Write-Host "=== Deploy API Sugestão de Compra (FreeTDS) ===" -ForegroundColor Green
 
 # Verificar se docker-compose existe
 if (!(Test-Path "docker-compose.yml")) {
@@ -9,61 +9,21 @@ if (!(Test-Path "docker-compose.yml")) {
     exit 1
 }
 
-# Perguntar qual Dockerfile usar
-Write-Host "Escolha o Dockerfile para usar:" -ForegroundColor Cyan
-Write-Host "1. Dockerfile (Microsoft ODBC Driver 18)" -ForegroundColor White
-Write-Host "2. Dockerfile.freetds (FreeTDS - alternativa mais simples)" -ForegroundColor White
-$choice = Read-Host "Digite sua escolha (1 ou 2)"
-
-$dockerfileToUse = "Dockerfile"
-if ($choice -eq "2") {
-    $dockerfileToUse = "Dockerfile.freetds"
-    Write-Host "Usando FreeTDS como driver SQL Server..." -ForegroundColor Yellow
-} else {
-    Write-Host "Usando Microsoft ODBC Driver 18..." -ForegroundColor Yellow
-}
+Write-Host "Usando FreeTDS como driver SQL Server (mais compatível)..." -ForegroundColor Yellow
 
 Write-Host "1. Parando containers existentes..." -ForegroundColor Yellow
 docker-compose down
 
 Write-Host "2. Construindo nova imagem (sem cache)..." -ForegroundColor Yellow
-$buildCmd = "docker-compose build --no-cache"
-
-# Se usando FreeTDS, modificar temporariamente o docker-compose
-if ($dockerfileToUse -eq "Dockerfile.freetds") {
-    # Fazer backup do docker-compose original
-    Copy-Item "docker-compose.yml" "docker-compose.yml.bak"
-    
-    # Modificar docker-compose para usar Dockerfile.freetds
-    $compose = Get-Content "docker-compose.yml" -Raw
-    $compose = $compose -replace "dockerfile: Dockerfile", "dockerfile: Dockerfile.freetds"
-    $compose | Set-Content "docker-compose.yml"
-    
-    Write-Host "Docker-compose modificado para usar Dockerfile.freetds" -ForegroundColor Yellow
-}
-
-Invoke-Expression $buildCmd
+docker-compose build --no-cache
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRO: Falha na construção da imagem!" -ForegroundColor Red
-    
-    # Restaurar docker-compose original se foi modificado
-    if ($dockerfileToUse -eq "Dockerfile.freetds" -and (Test-Path "docker-compose.yml.bak")) {
-        Move-Item "docker-compose.yml.bak" "docker-compose.yml" -Force
-        Write-Host "Docker-compose original restaurado." -ForegroundColor Yellow
-    }
-    
     exit 1
 }
 
 Write-Host "3. Iniciando containers..." -ForegroundColor Yellow
 docker-compose up -d
-
-# Restaurar docker-compose original se foi modificado
-if ($dockerfileToUse -eq "Dockerfile.freetds" -and (Test-Path "docker-compose.yml.bak")) {
-    Move-Item "docker-compose.yml.bak" "docker-compose.yml" -Force
-    Write-Host "Docker-compose original restaurado." -ForegroundColor Yellow
-}
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRO: Falha ao iniciar containers!" -ForegroundColor Red
@@ -87,9 +47,9 @@ try {
     Write-Host "  PostgreSQL: $($response.postgresql.status) - $($response.postgresql.message)" -ForegroundColor $(if($response.postgresql.status -eq "ok") {"Green"} else {"Red"})
     
     if ($response.sql_server.drivers.Count -gt 0) {
-        Write-Host "  Drivers SQL Server encontrados: $($response.sql_server.drivers -join ', ')" -ForegroundColor Green
+        Write-Host "  Drivers FreeTDS encontrados: $($response.sql_server.drivers -join ', ')" -ForegroundColor Green
     } else {
-        Write-Host "  ATENÇÃO: Nenhum driver SQL Server encontrado!" -ForegroundColor Red
+        Write-Host "  ATENÇÃO: Nenhum driver FreeTDS encontrado!" -ForegroundColor Red
     }
     
 } catch {
