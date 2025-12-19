@@ -320,10 +320,7 @@ def api_sugestao_compra():
         if not data:
             data = {}
         
-        # Log para debug
-        print(f"DEBUG - Dados recebidos: {data}")
-        print(f"DEBUG - Content-Type: {request.content_type}")
-        print(f"DEBUG - Content-Length: {request.content_length}")
+        # Logs removidos para melhor performance
         
         # Validar tipos dos parâmetros
         pedido_cotacao = data.get('pedido_cotacao')
@@ -353,7 +350,7 @@ def api_sugestao_compra():
                 "message": "dias_compra deve ser um número inteiro positivo"
             }), 400
         
-        print(f"DEBUG - Parâmetros processados: pedido={pedido_cotacao}, marca={marca_descricao}, dias={dias_compra}")
+        # Debug removido para melhor performance
         
         # Executar sugestão
         df_resultado = executar_sugestao(pedido_cotacao, marca_descricao, dias_compra)
@@ -365,9 +362,19 @@ def api_sugestao_compra():
                 "message": "Nenhum resultado encontrado"
             }), 404
         
-        # Filtrar apenas PRO_CODIGO e QTD_SUGERIDA
+        # Filtrar apenas produtos com sugestão de compra > 0
+        produtos_com_sugestao = df_resultado[df_resultado['QTD_SUGERIDA'] > 0]
+        
+        if produtos_com_sugestao.empty:
+            return jsonify({
+                "success": True,
+                "data": [],
+                "message": "Nenhum produto necessita de compra no momento"
+            })
+
+        # Filtrar apenas PRO_CODIGO e QTD_SUGERIDA dos produtos que precisam de compra
         resultado = []
-        for _, row in df_resultado.iterrows():
+        for _, row in produtos_com_sugestao.iterrows():
             # Debug: imprimir valores para verificar
             pro_codigo = str(row.get("PRO_CODIGO", ""))
             qtd_sugerida = row.get("QTD_SUGERIDA", 0)
@@ -382,7 +389,7 @@ def api_sugestao_compra():
                 print(f"ERRO: Não foi possível converter QTD_SUGERIDA para int: {qtd_sugerida} (tipo: {type(qtd_sugerida)})")
                 qtd_sugerida_int = 0
                 
-            print(f"DEBUG POST - PRO_CODIGO: {pro_codigo}, QTD_SUGERIDA original: {qtd_sugerida}, convertido: {qtd_sugerida_int}")
+            # Debug removido para melhor performance
             
             resultado.append({
                 "PRO_CODIGO": pro_codigo,
@@ -725,15 +732,7 @@ def sugerir_compra(row):
     curva    = row.get("CURVA_ABC")
     pro_codigo = row.get("PRO_CODIGO", "")
     
-    # Debug: imprimir dados básicos para alguns produtos
-    if str(pro_codigo) in ["11485", "15009", "20785"]:  # Primeiros produtos do resultado
-        print(f"\n=== DEBUG PRODUTO {pro_codigo} ===")
-        print(f"ESTOQUE_DISPONIVEL: {est}")
-        print(f"ESTOQUE_MIN_SUGERIDO: {est_min0}")
-        print(f"ESTOQUE_MAX_SUGERIDO: {est_max0}")
-        print(f"TIPO_PLANEJAMENTO: {tipo}")
-        print(f"ALERTA_TENDENCIA_ALTA: {alerta}")
-        print(f"CURVA_ABC: {curva}")
+    # Debug removido para melhor performance
     
     dem = row.get("DEMANDA_MEDIA_DIA_AJUSTADA", 0)
     if pd.isna(dem) or dem == 0:
