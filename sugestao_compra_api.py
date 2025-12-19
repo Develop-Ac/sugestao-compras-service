@@ -682,16 +682,22 @@ def calcular_sugestao_pura(est, est_min_calc, est_max_calc, tipo, alerta, curva)
       - caso contrário -> completar até o máximo alvo
         (com reforço leve se for A/B com tendência alta)
     """
+    # Debug: imprimir valores de entrada
+    print(f"DEBUG calcular_sugestao_pura - est:{est}, est_min:{est_min_calc}, est_max:{est_max_calc}, tipo:{tipo}, alerta:{alerta}, curva:{curva}")
+    
     # 1) Sob demanda: não sugere automático
     if tipo == "Sob_Demanda":
+        print("DEBUG: Retornando 0 - Sob_Demanda")
         return 0
 
     # 2) Se nem máximo faz sentido (0 ou negativo), não sugere
     if est_max_calc is None or est_max_calc <= 0:
+        print(f"DEBUG: Retornando 0 - est_max_calc inválido: {est_max_calc}")
         return 0
 
     # 3) Se já está no máximo ou acima, não sugere
     if est >= est_max_calc:
+        print(f"DEBUG: Retornando 0 - estoque {est} >= máximo {est_max_calc}")
         return 0
 
     # 4) Complementar até o máximo alvo
@@ -703,8 +709,11 @@ def calcular_sugestao_pura(est, est_min_calc, est_max_calc, tipo, alerta, curva)
     # Refórcinho só para itens importantes com tendência alta
     if alerta == "Sim" and curva in ["A", "B"]:
         fator = 1.2
+        print(f"DEBUG: Aplicando fator 1.2 para curva {curva} com tendência alta")
 
-    return apply_rounding(base * fator, curva)
+    resultado = apply_rounding(base * fator, curva)
+    print(f"DEBUG: base={base}, fator={fator}, resultado final={resultado}")
+    return resultado
 
 
 def sugerir_compra(row):
@@ -715,9 +724,18 @@ def sugerir_compra(row):
     tipo     = row.get("TIPO_PLANEJAMENTO")
     alerta   = row.get("ALERTA_TENDENCIA_ALTA")
     curva    = row.get("CURVA_ABC")
-    tipo     = row.get("TIPO_PLANEJAMENTO")
-    alerta   = row.get("ALERTA_TENDENCIA_ALTA")
-    curva    = row.get("CURVA_ABC")
+    pro_codigo = row.get("PRO_CODIGO", "")
+    
+    # Debug: imprimir dados básicos para alguns produtos
+    if str(pro_codigo) in ["11485", "15009", "20785"]:  # Primeiros produtos do resultado
+        print(f"\n=== DEBUG PRODUTO {pro_codigo} ===")
+        print(f"ESTOQUE_DISPONIVEL: {est}")
+        print(f"ESTOQUE_MIN_SUGERIDO: {est_min0}")
+        print(f"ESTOQUE_MAX_SUGERIDO: {est_max0}")
+        print(f"TIPO_PLANEJAMENTO: {tipo}")
+        print(f"ALERTA_TENDENCIA_ALTA: {alerta}")
+        print(f"CURVA_ABC: {curva}")
+    
     dem = row.get("DEMANDA_MEDIA_DIA_AJUSTADA", 0)
     if pd.isna(dem) or dem == 0:
         dem = row.get("DEMANDA_MEDIA_DIA", 0)
