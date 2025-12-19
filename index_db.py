@@ -67,50 +67,47 @@ def criar_tabela_postgres():
     CREATE TABLE IF NOT EXISTS com_fifo_completo (
         id SERIAL PRIMARY KEY,
         data_processamento TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        tipo_dados VARCHAR(50) NOT NULL,  -- 'ANALISE_ATUAL', 'RELATORIO_MUDANCAS', 'FIFO_SALDO'
         pro_codigo VARCHAR(50),
+        tempo_medio_estoque DECIMAL(15,4),
+        qtd_vendida DECIMAL(15,4),
+        valor_vendido DECIMAL(15,4),
+        data_min_venda DATE,
+        data_max_venda DATE,
+        periodo_dias INTEGER,
+        demanda_media_dia DECIMAL(15,6),
+        num_vendas INTEGER,
+        vendas_ult_12m DECIMAL(15,4),
+        vendas_12m_ant DECIMAL(15,4),
+        fator_tendencia DECIMAL(10,6),
+        tendencia_label VARCHAR(20),
+        dias_ruptura INTEGER,
+        demanda_media_dia_ajustada DECIMAL(15,6),
         pro_descricao TEXT,
-        subgrp_codigo VARCHAR(50),
+        estoque_disponivel DECIMAL(15,4),
         mar_descricao VARCHAR(100),
         fornecedor1 VARCHAR(200),
         fornecedor2 VARCHAR(200),
         fornecedor3 VARCHAR(200),
-        estoque_disponivel DECIMAL(15,4),
-        valor_custo_unitario DECIMAL(15,4),
-        valor_total_custo DECIMAL(15,4),
-        qtd_vendida_periodo DECIMAL(15,4),
-        valor_vendido_periodo DECIMAL(15,4),
-        data_ultima_venda DATE,
-        margem_lucro DECIMAL(10,4),
-        giro_estoque DECIMAL(10,4),
-        abc_vendas VARCHAR(10),
-        abc_estoque VARCHAR(10),
-        abc_margem VARCHAR(10),
-        classificacao_geral VARCHAR(50),
-        recomendacao TEXT,
-        data_compra DATE,
-        nfe VARCHAR(50),
-        nfs VARCHAR(50),
-        lancto INTEGER,
-        preco_custo DECIMAL(15,4),
-        total_liquido DECIMAL(15,4),
-        data_movimentacao DATE,
-        origem VARCHAR(10),
-        quantidade DECIMAL(15,4),
-        indice INTEGER,
-        qtd_acumulada DECIMAL(15,4),
-        qtd_acum_saida DECIMAL(15,4),
-        saldo_fifo DECIMAL(15,4),
-        valor_fifo DECIMAL(15,4),
-        data_entrada DATE,
-        dias_estoque INTEGER,
-        percentual_saldo DECIMAL(10,4),
+        pct_acum_valor DECIMAL(10,4),
+        curva_abc VARCHAR(10),
+        categoria_estocagem VARCHAR(20),
+        estoque_min_base INTEGER,
+        estoque_max_base INTEGER,
+        fator_ajuste_tendencia DECIMAL(10,6),
+        estoque_min_ajustado INTEGER,
+        estoque_max_ajustado INTEGER,
+        estoque_min_sugerido INTEGER,
+        estoque_max_sugerido INTEGER,
+        tipo_planejamento VARCHAR(30),
+        alerta_tendencia_alta VARCHAR(10),
+        descricao_calculo_estoque TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     
     CREATE INDEX IF NOT EXISTS idx_com_fifo_data_processamento ON com_fifo_completo (data_processamento);
-    CREATE INDEX IF NOT EXISTS idx_com_fifo_tipo_dados ON com_fifo_completo (tipo_dados);
     CREATE INDEX IF NOT EXISTS idx_com_fifo_pro_codigo ON com_fifo_completo (pro_codigo);
+    CREATE INDEX IF NOT EXISTS idx_com_fifo_curva_abc ON com_fifo_completo (curva_abc);
+    CREATE INDEX IF NOT EXISTS idx_com_fifo_categoria_estocagem ON com_fifo_completo (categoria_estocagem);
     """
     
     try:
@@ -1191,31 +1188,80 @@ def enviar_email_relatorio(arquivo_anexo, df_mudancas):
 # FUNÇÕES DE SALVAMENTO NO POSTGRESQL
 # ==========================================
 
-def salvar_dataframe_postgres(df, tipo_dados, data_processamento=None):
+def verificar_tabela_postgres():
     """
-    Salva um DataFrame no PostgreSQL na tabela com_fifo_completo
-    
-    Args:
-        df: DataFrame a ser salvo
-        tipo_dados: Tipo dos dados ('ANALISE_ATUAL', 'RELATORIO_MUDANCAS', 'FIFO_SALDO')
-        data_processamento: Timestamp do processamento (opcional)
+    Verifica se a tabela com_fifo_completo existe e mostra algumas informações básicas
     """
-    if df.empty:
-        print(f"DataFrame {tipo_dados} vazio. Nada para salvar.")
+    try:
+        engine = get_postgres_engine()
+        
+        with engine.connect() as conn:
+            # Verifica se a tabela existe
+            result = conn.execute(text("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = 'com_fifo_completo'
+                );
+            """))
+            existe = result.scalar()
+            
+            if existe:
+                # Conta registros
+                result = conn.execute(text("SELECT COUNT(*) FROM com_fifo_completo"))
+                count = result.scalar()
+                
+                # Data do último processamento
+                result = conn.execute(text("""
+                    SELECT MAX(data_processamento) 
+                    FROM com_fifo_completo
+                """))
+                ultima_data = result.scalar()
+                
+                print(f"✓ Tabela com_fifo_completo existe")
+                print(f"✓ Total de registros: {count}")
+                print(f"✓ Último processamento: {ultima_data}")
+                
+                # Mostra amostra dos dados
+                if count > 0:
+                    result = conn.execute(text("""
+                        SELECT pro_codigo, pro_descricao, curva_abc, estoque_min_sugerido, estoque_max_sugerido
+                        FROM com_fifo_completo 
+                        WHERE data_processamento = (SELECT MAX(data_processamento) FROM com_fifo_completo)
+                        ORDER BY qtd_vendida DESC
+                        LIMIT 5
+                    """))
+                    
+                    print("\nAmostra dos 5 produtos com maior volume de vendas:")
+                    print("CÓDIGO\tDESCRIÇÃO\tABC\tMÍN\tMÁX")
+                    print("-" * 80)
+                    for row in result:
+                        desc = (row[1][:30] + "...") if len(str(row[1] or "")) > 30 else (row[1] or "")
+                        print(f"{row[0]}\t{desc}\t{row[2]}\t{row[3]}\t{row[4]}")
+                
+            else:
+                print("❌ Tabela com_fifo_completo não existe")
+                
+    except Exception as e:
+        print(f"Erro ao verificar tabela: {e}")
+
+
+def salvar_metricas_postgres(df_metricas):
+    """
+    Salva as métricas calculadas na tabela com_fifo_completo do PostgreSQL
+    """
+    if df_metricas.empty:
+        print("DataFrame de métricas vazio. Nada para salvar.")
         return
     
-    if data_processamento is None:
-        data_processamento = datetime.datetime.now()
-    
     # Cria uma cópia do DataFrame para não modificar o original
-    df_save = df.copy()
+    df_save = df_metricas.copy()
     
-    # Adiciona colunas de controle
-    df_save['data_processamento'] = data_processamento
-    df_save['tipo_dados'] = tipo_dados
+    # Adiciona timestamp do processamento
+    df_save['data_processamento'] = datetime.datetime.now()
     
-    # Converte colunas de data que podem estar como object para datetime
-    date_columns = ['DATA_COMPRA', 'data_movimentacao', 'data_entrada', 'data_ultima_venda']
+    # Converte colunas de data para datetime se necessário
+    date_columns = ['DATA_MIN_VENDA', 'DATA_MAX_VENDA']
     for col in date_columns:
         if col in df_save.columns:
             df_save[col] = pd.to_datetime(df_save[col], errors='coerce')
@@ -1223,74 +1269,81 @@ def salvar_dataframe_postgres(df, tipo_dados, data_processamento=None):
     # Mapeia as colunas do DataFrame para as colunas da tabela
     column_mapping = {
         'PRO_CODIGO': 'pro_codigo',
-        'PRO_DESCRICAO': 'pro_descricao', 
-        'SUBGRP_CODIGO': 'subgrp_codigo',
+        'TEMPO_MEDIO_ESTOQUE': 'tempo_medio_estoque',
+        'QTD_VENDIDA': 'qtd_vendida',
+        'VALOR_VENDIDO': 'valor_vendido', 
+        'DATA_MIN_VENDA': 'data_min_venda',
+        'DATA_MAX_VENDA': 'data_max_venda',
+        'PERIODO_DIAS': 'periodo_dias',
+        'DEMANDA_MEDIA_DIA': 'demanda_media_dia',
+        'NUM_VENDAS': 'num_vendas',
+        'VENDAS_ULT_12M': 'vendas_ult_12m',
+        'VENDAS_12M_ANT': 'vendas_12m_ant',
+        'FATOR_TENDENCIA': 'fator_tendencia',
+        'TENDENCIA_LABEL': 'tendencia_label',
+        'DIAS_RUPTURA': 'dias_ruptura',
+        'DEMANDA_MEDIA_DIA_AJUSTADA': 'demanda_media_dia_ajustada',
+        'PRO_DESCRICAO': 'pro_descricao',
+        'ESTOQUE_DISPONIVEL': 'estoque_disponivel',
         'MAR_DESCRICAO': 'mar_descricao',
         'FORNECEDOR1': 'fornecedor1',
-        'FORNECEDOR2': 'fornecedor2', 
+        'FORNECEDOR2': 'fornecedor2',
         'FORNECEDOR3': 'fornecedor3',
-        'ESTOQUE_DISPONIVEL': 'estoque_disponivel',
-        'VALOR_CUSTO_UNITARIO': 'valor_custo_unitario',
-        'VALOR_TOTAL_CUSTO': 'valor_total_custo',
-        'QTD_VENDIDA_PERIODO': 'qtd_vendida_periodo',
-        'VALOR_VENDIDO_PERIODO': 'valor_vendido_periodo',
-        'DATA_ULTIMA_VENDA': 'data_ultima_venda',
-        'MARGEM_LUCRO': 'margem_lucro',
-        'GIRO_ESTOQUE': 'giro_estoque',
-        'ABC_VENDAS': 'abc_vendas',
-        'ABC_ESTOQUE': 'abc_estoque',
-        'ABC_MARGEM': 'abc_margem',
-        'CLASSIFICACAO_GERAL': 'classificacao_geral',
-        'RECOMENDACAO': 'recomendacao',
-        'DATA_COMPRA': 'data_compra',
-        'NFE': 'nfe',
-        'NFS': 'nfs',
-        'LANCTO': 'lancto',
-        'PRECO_CUSTO': 'preco_custo',
-        'TOTAL_LIQUIDO': 'total_liquido',
-        'DATA': 'data_movimentacao',
-        'ORIGEM': 'origem',
-        'QUANTIDADE': 'quantidade',
-        'INDICE': 'indice',
-        'QTD_ACUMULADA': 'qtd_acumulada',
-        'QTD_ACUM_SAIDA': 'qtd_acum_saida',
-        'SALDO_FIFO': 'saldo_fifo',
-        'VALOR_FIFO': 'valor_fifo',
-        'DATA_ENTRADA': 'data_entrada',
-        'DIAS_ESTOQUE': 'dias_estoque',
-        'PERCENTUAL_SALDO': 'percentual_saldo'
+        'PCT_ACUM_VALOR': 'pct_acum_valor',
+        'CURVA_ABC': 'curva_abc',
+        'CATEGORIA_ESTOCAGEM': 'categoria_estocagem',
+        'ESTOQUE_MIN_BASE': 'estoque_min_base',
+        'ESTOQUE_MAX_BASE': 'estoque_max_base',
+        'FATOR_AJUSTE_TENDENCIA': 'fator_ajuste_tendencia',
+        'ESTOQUE_MIN_AJUSTADO': 'estoque_min_ajustado',
+        'ESTOQUE_MAX_AJUSTADO': 'estoque_max_ajustado',
+        'ESTOQUE_MIN_SUGERIDO': 'estoque_min_sugerido',
+        'ESTOQUE_MAX_SUGERIDO': 'estoque_max_sugerido',
+        'TIPO_PLANEJAMENTO': 'tipo_planejamento',
+        'ALERTA_TENDENCIA_ALTA': 'alerta_tendencia_alta',
+        'DESCRICAO_CALCULO_ESTOQUE': 'descricao_calculo_estoque'
     }
     
     # Renomeia as colunas
     df_save = df_save.rename(columns=column_mapping)
     
-    # Garante que todas as colunas necessárias existem (adiciona como NULL se não existir)
-    required_columns = [
-        'data_processamento', 'tipo_dados', 'pro_codigo', 'pro_descricao', 
-        'subgrp_codigo', 'mar_descricao', 'fornecedor1', 'fornecedor2', 
-        'fornecedor3', 'estoque_disponivel', 'valor_custo_unitario', 
-        'valor_total_custo', 'qtd_vendida_periodo', 'valor_vendido_periodo',
-        'data_ultima_venda', 'margem_lucro', 'giro_estoque', 'abc_vendas',
-        'abc_estoque', 'abc_margem', 'classificacao_geral', 'recomendacao',
-        'data_compra', 'nfe', 'nfs', 'lancto', 'preco_custo', 'total_liquido',
-        'data_movimentacao', 'origem', 'quantidade', 'indice', 'qtd_acumulada',
-        'qtd_acum_saida', 'saldo_fifo', 'valor_fifo', 'data_entrada', 
-        'dias_estoque', 'percentual_saldo'
+    # Lista das colunas da tabela na ordem correta
+    table_columns = [
+        'data_processamento', 'pro_codigo', 'tempo_medio_estoque', 'qtd_vendida',
+        'valor_vendido', 'data_min_venda', 'data_max_venda', 'periodo_dias',
+        'demanda_media_dia', 'num_vendas', 'vendas_ult_12m', 'vendas_12m_ant',
+        'fator_tendencia', 'tendencia_label', 'dias_ruptura', 'demanda_media_dia_ajustada',
+        'pro_descricao', 'estoque_disponivel', 'mar_descricao', 'fornecedor1',
+        'fornecedor2', 'fornecedor3', 'pct_acum_valor', 'curva_abc',
+        'categoria_estocagem', 'estoque_min_base', 'estoque_max_base',
+        'fator_ajuste_tendencia', 'estoque_min_ajustado', 'estoque_max_ajustado',
+        'estoque_min_sugerido', 'estoque_max_sugerido', 'tipo_planejamento',
+        'alerta_tendencia_alta', 'descricao_calculo_estoque'
     ]
     
-    for col in required_columns:
+    # Garante que todas as colunas necessárias existem (adiciona como None se não existir)
+    for col in table_columns:
         if col not in df_save.columns:
             df_save[col] = None
     
-    # Seleciona apenas as colunas necessárias
-    df_save = df_save[required_columns]
+    # Seleciona apenas as colunas necessárias na ordem correta
+    df_save = df_save[table_columns]
     
     try:
         engine = get_postgres_engine()
         
-        # Salva no banco (append para adicionar aos dados existentes)
+        # Limpa dados antigos da mesma data (se existir)
+        hoje = datetime.date.today()
+        with engine.connect() as conn:
+            conn.execute(
+                text("DELETE FROM com_fifo_completo WHERE DATE(data_processamento) = :data"),
+                {"data": hoje}
+            )
+            conn.commit()
+        
+        # Salva os novos dados
         df_save.to_sql(
-            TABELA_FIFO, 
+            'com_fifo_completo', 
             engine, 
             if_exists='append', 
             index=False,
@@ -1298,31 +1351,24 @@ def salvar_dataframe_postgres(df, tipo_dados, data_processamento=None):
             chunksize=1000
         )
         
-        print(f"Salvos {len(df_save)} registros do tipo '{tipo_dados}' no PostgreSQL")
+        print(f"Salvos {len(df_save)} registros na tabela com_fifo_completo do PostgreSQL")
         
     except Exception as e:
-        print(f"Erro ao salvar {tipo_dados} no PostgreSQL: {e}")
+        print(f"Erro ao salvar no PostgreSQL: {e}")
         raise
 
 
 def salvar_dados_postgres(df_metricas, df_mudancas, df_long):
     """
-    Salva todos os DataFrames no PostgreSQL
+    Salva os dados das métricas na tabela com_fifo_completo do PostgreSQL
     """
     print("Salvando dados no PostgreSQL...")
     
     # Cria a tabela se não existir
     criar_tabela_postgres()
     
-    data_processamento = datetime.datetime.now()
-    
-    # Salva cada DataFrame com seu tipo específico
-    salvar_dataframe_postgres(df_metricas, 'ANALISE_ATUAL', data_processamento)
-    
-    if not df_mudancas.empty:
-        salvar_dataframe_postgres(df_mudancas, 'RELATORIO_MUDANCAS', data_processamento)
-    
-    salvar_dataframe_postgres(df_long, 'FIFO_SALDO', data_processamento)
+    # Salva apenas as métricas principais na tabela
+    salvar_metricas_postgres(df_metricas)
     
     print("Dados salvos com sucesso no PostgreSQL!")
 
@@ -1451,6 +1497,12 @@ def run_job():
     # 9) Enviar e-mail
     enviar_email_relatorio(ARQUIVO_SAIDA, df_mudancas)
     
+    # 10) Verificar dados salvos
+    print("\n" + "="*50)
+    print("VERIFICAÇÃO FINAL DA TABELA")
+    print("="*50)
+    verificar_tabela_postgres()
+    
     print("Job finalizado com sucesso.")
 
 
@@ -1506,5 +1558,12 @@ if __name__ == "__main__":
     # Se o usuário passar argumento "run", roda direto
     if len(sys.argv) > 1 and sys.argv[1] == "run":
         run_job()
+    elif len(sys.argv) > 1 and sys.argv[1] == "check":
+        # Verifica apenas a tabela
+        verificar_tabela_postgres()
+    elif len(sys.argv) > 1 and sys.argv[1] == "create":
+        # Cria apenas a tabela
+        criar_tabela_postgres()
+        print("Tabela criada/verificada com sucesso!")
     else:
         start_service()

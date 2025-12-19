@@ -178,22 +178,53 @@ def carregar_analise_atual_postgres():
         if 'PRO_CODIGO' in df.columns:
             df['PRO_CODIGO'] = df['PRO_CODIGO'].astype(str)
         
-        # Adiciona colunas que podem estar faltando com valores padrão
-        required_columns = {
-            'ESTOQUE_MIN_SUGERIDO': 0,
-            'ESTOQUE_MAX_SUGERIDO': 0,
+        # Calcular estoques mínimo e máximo baseado nos dados disponíveis
+        # Se não temos dados específicos, usar uma lógica baseada no giro e vendas
+        if 'QTD_VENDIDA_PERIODO' in df.columns and 'GIRO_ESTOQUE' in df.columns:
+            # Calcular demanda média diária aproximada (assumindo período de 90 dias)
+            df['DEMANDA_MEDIA_DIA'] = df['QTD_VENDIDA_PERIODO'] / 90
+            df['DEMANDA_MEDIA_DIA_AJUSTADA'] = df['DEMANDA_MEDIA_DIA']
+            
+            # Calcular estoque mínimo: 15 dias de demanda (lead time + segurança)
+            df['ESTOQUE_MIN_SUGERIDO'] = (df['DEMANDA_MEDIA_DIA'] * 15).round().astype(int)
+            
+            # Calcular estoque máximo baseado no parâmetro DIAS_COMPRA_USER ou padrão
+            dias_estoque = DIAS_ESTOQUE_DESEJADO + LEAD_TIME_DIAS  # 90 + 17 = 107 dias
+            df['ESTOQUE_MAX_SUGERIDO'] = (df['DEMANDA_MEDIA_DIA'] * dias_estoque).round().astype(int)
+            
+            print(f"Calculados estoques min/max baseados na demanda do período")
+        else:
+            print("ATENÇÃO: Não foi possível calcular estoques min/max - dados insuficientes")
+            df['DEMANDA_MEDIA_DIA'] = 0
+            df['DEMANDA_MEDIA_DIA_AJUSTADA'] = 0
+            df['ESTOQUE_MIN_SUGERIDO'] = 0
+            df['ESTOQUE_MAX_SUGERIDO'] = 0
+        
+        # Adicionar outras colunas que podem estar faltando
+        other_columns = {
             'TIPO_PLANEJAMENTO': 'Normal',
-            'ALERTA_TENDENCIA_ALTA': 'Não',
+            'ALERTA_TENDENCIA_ALTA': 'Não', 
             'CURVA_ABC': 'C',
-            'DEMANDA_MEDIA_DIA': 0,
-            'DEMANDA_MEDIA_DIA_AJUSTADA': 0,
             'NUM_VENDAS': 0
         }
         
-        for col, default_value in required_columns.items():
+        for col, default_value in other_columns.items():
             if col not in df.columns:
                 df[col] = default_value
                 print(f"Adicionada coluna {col} com valor padrão: {default_value}")
+        
+        # Mapear classificação ABC se disponível
+        if 'ABC_VENDAS' in df.columns:
+            df['CURVA_ABC'] = df['ABC_VENDAS'].fillna('C')
+            print("Mapeado CURVA_ABC baseado em ABC_VENDAS")
+        
+        # Definir alerta de tendência alta baseado no giro de estoque
+        if 'GIRO_ESTOQUE' in df.columns:
+            # Se giro > 4 (gira mais de 4x no ano), considera tendência alta
+            df['ALERTA_TENDENCIA_ALTA'] = df['GIRO_ESTOQUE'].apply(
+                lambda x: 'Sim' if pd.notna(x) and x > 4 else 'Não'
+            )
+            print("Calculado ALERTA_TENDENCIA_ALTA baseado no giro de estoque")
         
         return df
         
@@ -682,22 +713,16 @@ def calcular_sugestao_pura(est, est_min_calc, est_max_calc, tipo, alerta, curva)
       - caso contrário -> completar até o máximo alvo
         (com reforço leve se for A/B com tendência alta)
     """
-    # Debug: imprimir valores de entrada
-    print(f"DEBUG calcular_sugestao_pura - est:{est}, est_min:{est_min_calc}, est_max:{est_max_calc}, tipo:{tipo}, alerta:{alerta}, curva:{curva}")
-    
     # 1) Sob demanda: não sugere automático
     if tipo == "Sob_Demanda":
-        print("DEBUG: Retornando 0 - Sob_Demanda")
         return 0
 
     # 2) Se nem máximo faz sentido (0 ou negativo), não sugere
     if est_max_calc is None or est_max_calc <= 0:
-        print(f"DEBUG: Retornando 0 - est_max_calc inválido: {est_max_calc}")
         return 0
 
     # 3) Se já está no máximo ou acima, não sugere
     if est >= est_max_calc:
-        print(f"DEBUG: Retornando 0 - estoque {est} >= máximo {est_max_calc}")
         return 0
 
     # 4) Complementar até o máximo alvo
@@ -709,10 +734,8 @@ def calcular_sugestao_pura(est, est_min_calc, est_max_calc, tipo, alerta, curva)
     # Refórcinho só para itens importantes com tendência alta
     if alerta == "Sim" and curva in ["A", "B"]:
         fator = 1.2
-        print(f"DEBUG: Aplicando fator 1.2 para curva {curva} com tendência alta")
 
     resultado = apply_rounding(base * fator, curva)
-    print(f"DEBUG: base={base}, fator={fator}, resultado final={resultado}")
     return resultado
 
 
