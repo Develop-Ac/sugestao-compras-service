@@ -361,9 +361,31 @@ def api_sugestao_compra():
         # Filtrar apenas PRO_CODIGO e QTD_SUGERIDA
         resultado = []
         for _, row in df_resultado.iterrows():
+            # Debug: imprimir valores para verificar
+            pro_codigo = str(row.get("PRO_CODIGO", ""))
+            qtd_sugerida = row.get("QTD_SUGERIDA", 0)
+            
+            # Verificar se é NaN ou None
+            if pd.isna(qtd_sugerida):
+                qtd_sugerida = 0
+            
+            try:
+                qtd_sugerida_int = int(qtd_sugerida)
+            except (ValueError, TypeError):
+                print(f"ERRO: Não foi possível converter QTD_SUGERIDA para int: {qtd_sugerida} (tipo: {type(qtd_sugerida)})")
+                qtd_sugerida_int = 0
+                
+            print(f"DEBUG POST - PRO_CODIGO: {pro_codigo}, QTD_SUGERIDA original: {qtd_sugerida}, convertido: {qtd_sugerida_int}")
+            
             resultado.append({
-                "PRO_CODIGO": str(row.get("PRO_CODIGO", "")),
-                "QTD_SUGERIDA": int(row.get("QTD_SUGERIDA", 0))
+                "PRO_CODIGO": pro_codigo,
+                "QTD_SUGERIDA": qtd_sugerida_int,
+                # Campos adicionais para debug
+                "ESTOQUE_DISPONIVEL": float(row.get("ESTOQUE_DISPONIVEL", 0)) if not pd.isna(row.get("ESTOQUE_DISPONIVEL", 0)) else 0,
+                "ESTOQUE_MIN_ALVO": float(row.get("ESTOQUE_MIN_ALVO", 0)) if not pd.isna(row.get("ESTOQUE_MIN_ALVO", 0)) else 0,
+                "ESTOQUE_MAX_ALVO": float(row.get("ESTOQUE_MAX_ALVO", 0)) if not pd.isna(row.get("ESTOQUE_MAX_ALVO", 0)) else 0,
+                "PRIORIDADE": str(row.get("PRIORIDADE", "")),
+                "MOTIVO_SUGESTAO": str(row.get("MOTIVO_SUGESTAO", ""))
             })
         
         return jsonify({
