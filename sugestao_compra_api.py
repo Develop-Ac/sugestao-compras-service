@@ -416,7 +416,8 @@ def api_sugestao_compra():
         }), 500
 
 
-# Adicionar endpoint de teste para verificar se a API está funcionando
+# Adicionar endpoint de teste para verificar se a A
+# PI está funcionando
 @app.route('/diagnostico', methods=['GET'])
 def diagnostico():
     """Endpoint para diagnóstico de conectividade"""
@@ -427,26 +428,21 @@ def diagnostico():
         "odbc_dsns": {}
     }
     
-    # Teste SQL Server
+    # Teste SQL Server (apenas drivers, sem tentar conexão)
     try:
         # Verificar drivers disponíveis
         all_drivers = pyodbc.drivers()
         sql_server_drivers = [d for d in all_drivers if 'freetds' in d.lower() or 'tds' in d.lower()]
         diagnostico_result["sql_server"]["drivers"] = sql_server_drivers
         
-        # Tentar conexão
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        result = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        
-        diagnostico_result["sql_server"]["status"] = "ok"
-        diagnostico_result["sql_server"]["message"] = f"Conexão SQL Server OK - {SQL_SERVER_HOST}:{SQL_SERVER_PORT}"
+        if sql_server_drivers:
+            diagnostico_result["sql_server"]["status"] = "drivers_ok"
+            diagnostico_result["sql_server"]["message"] = f"Drivers disponíveis para {SQL_SERVER_HOST}:{SQL_SERVER_PORT} (conexão não testada)"
+        else:
+            diagnostico_result["sql_server"]["message"] = "Nenhum driver FreeTDS encontrado"
         
     except Exception as e:
-        diagnostico_result["sql_server"]["message"] = f"Erro SQL Server: {str(e)}"
+        diagnostico_result["sql_server"]["message"] = f"Erro ao verificar drivers: {str(e)}"
     
     # Teste PostgreSQL
     try:
@@ -468,6 +464,29 @@ def diagnostico():
         diagnostico_result["odbc_dsns"] = {"error": str(e)}
     
     return jsonify(diagnostico_result)
+
+
+@app.route('/diagnostico-sql', methods=['POST'])
+def diagnostico_sql_server():
+    """Endpoint específico para testar SQL Server apenas quando necessário"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "status": "ok",
+            "message": f"Conexão SQL Server OK - {SQL_SERVER_HOST}:{SQL_SERVER_PORT}"
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro SQL Server: {str(e)}"
+        }), 500
 
 
 @app.route('/health', methods=['GET'])
@@ -615,56 +634,64 @@ def api_sugestao_get():
 def executar_sugestao(pedido_cotacao=None, marca_descricao=None, dias_compra=30):
     global MARCA_DESCRICAO, ANALISA_PEDIDO, DIAS_COMPRA_USER
     
-    MARCA_DESCRICAO = marca_descricao
-    DIAS_COMPRA_USER = dias_compra
-    ANALISA_PEDIDO = pedido_cotacao is not None
+    try:
+        MARCA_DESCRICAO = marca_descricao
+        DIAS_COMPRA_USER = dias_compra
+        ANALISA_PEDIDO = pedido_cotacao is not None
 
-    # Carrega dados do PostgreSQL ao invés do Excel
-    df_met = carregar_analise_atual_postgres()
-    
-    if df_met is None or df_met.empty:
-        print("Não foi possível carregar dados do PostgreSQL")
-        return None
-
-    # Filtro por marca se especificado
-    if MARCA_DESCRICAO:
-        if "MAR_DESCRICAO" in df_met.columns:
-            mask_marca = df_met["MAR_DESCRICAO"].astype(str).str.contains(
-                MARCA_DESCRICAO, case=False, na=False
-            )
-            df_met = df_met.loc[mask_marca].copy()
+        # Carrega dados do PostgreSQL ao invés do Excel
+        df_met = carregar_analise_atual_postgres()
         
-    if df_met.empty:
-        return None
-
-    # Se está analisando pedido, faz merge com dados do pedido
-    if ANALISA_PEDIDO:
-        df_ped = carregar_itens_pedido(pedido_cotacao, EMPRESA_PEDIDO, MARCA_DESCRICAO)
-        
-        if df_ped.empty:
+        if df_met is None or df_met.empty:
+            print("Não foi possível carregar dados do PostgreSQL")
             return None
-        
-        # Debug: verificar tipos antes do merge
-        print(f"DEBUG - df_met PRO_CODIGO tipo: {df_met['PRO_CODIGO'].dtype}")
-        print(f"DEBUG - df_ped PRO_CODIGO tipo: {df_ped['PRO_CODIGO'].dtype}")
-        print(f"DEBUG - df_met PRO_CODIGO amostra: {df_met['PRO_CODIGO'].head().tolist()}")
-        print(f"DEBUG - df_ped PRO_CODIGO amostra: {df_ped['PRO_CODIGO'].head().tolist()}")
-        
-        # Garante que ambos sejam string
-        df_met['PRO_CODIGO'] = df_met['PRO_CODIGO'].astype(str)
-        df_ped['PRO_CODIGO'] = df_ped['PRO_CODIGO'].astype(str)
+
+        # Filtro por marca se especificado
+        if MARCA_DESCRICAO:
+            if "MAR_DESCRICAO" in df_met.columns:
+                mask_marca = df_met["MAR_DESCRICAO"].astype(str).str.contains(
+                    MARCA_DESCRICAO, case=False, na=False
+                )
+                df_met = df_met.loc[mask_marca].copy()
             
-        df = df_met.merge(df_ped, on="PRO_CODIGO", how="inner")
-        if df.empty:
+        if df_met.empty:
             return None
-    else:
-        df = df_met.copy()
+
+        # Se está analisando pedido, faz merge com dados do pedido (REQUER SQL SERVER)
+        if ANALISA_PEDIDO:
+            try:
+                df_ped = carregar_itens_pedido(pedido_cotacao, EMPRESA_PEDIDO, MARCA_DESCRICAO)
+                
+                if df_ped.empty:
+                    print("Nenhum item encontrado no pedido especificado")
+                    return None
+                
+                # Garante que ambos sejam string
+                df_met['PRO_CODIGO'] = df_met['PRO_CODIGO'].astype(str)
+                df_ped['PRO_CODIGO'] = df_ped['PRO_CODIGO'].astype(str)
+                    
+                df = df_met.merge(df_ped, on="PRO_CODIGO", how="inner")
+                if df.empty:
+                    print("Nenhum produto do pedido encontrado na análise FIFO")
+                    return None
+            except Exception as sql_error:
+                print(f"Erro ao acessar dados do pedido (SQL Server indisponível): {sql_error}")
+                print("Convertendo para análise geral sem pedido específico...")
+                # Se SQL Server não estiver disponível, faz análise geral
+                ANALISA_PEDIDO = False
+                df = df_met.copy()
+        else:
+            df = df_met.copy()
+            
+        # Aplica a lógica de sugestão
+        sug = df.apply(sugerir_compra, axis=1)
+        df_sug = df.join(sug)
         
-    # Aplica a lógica de sugestão
-    sug = df.apply(sugerir_compra, axis=1)
-    df_sug = df.join(sug)
-    
-    return df_sug
+        return df_sug
+        
+    except Exception as e:
+        print(f"Erro geral em executar_sugestao: {e}")
+        return None
 
 
 def apply_rounding(value, curve):
