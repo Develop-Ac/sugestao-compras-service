@@ -3,29 +3,29 @@ FROM python:3.11-slim
 # Definir diretório de trabalho
 WORKDIR /app
 
-# Instalar dependências do sistema necessárias para PostgreSQL e ODBC
+# Instalar dependências do sistema necessárias para PostgreSQL e SQL Server ODBC
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     unixodbc \
     unixodbc-dev \
-    freetds-dev \
-    freetds-bin \
-    tdsodbc \
     curl \
+    gnupg2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Configurar DSN ODBC para Firebird (se necessário)
-# Criar arquivo odbc.ini
-RUN echo "[CONSULTA]" > /etc/odbc.ini && \
-    echo "Driver = FreeTDS" >> /etc/odbc.ini && \
-    echo "Description = Firebird Database" >> /etc/odbc.ini && \
-    echo "Server = your-firebird-server" >> /etc/odbc.ini && \
-    echo "Port = 3050" >> /etc/odbc.ini && \
-    echo "Database = /path/to/your/database.fdb" >> /etc/odbc.ini
+# Instalar Microsoft ODBC Driver 18 for SQL Server
+RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
+    && curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements.txt primeiro para cache de dependências
+# Copiar requirements.txt e script de configuração primeiro para cache de dependências
 COPY requirements.txt .
+COPY configure_odbc.sh .
+
+# Dar permissão de execução ao script
+RUN chmod +x configure_odbc.sh
 
 # Instalar dependências Python
 RUN pip install --no-cache-dir -r requirements.txt
@@ -46,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
 # Comando para executar a aplicação
-CMD ["python", "sugestao_compra_api.py"]
+CMD ["sh", "-c", "./configure_odbc.sh && python sugestao_compra_api.py"]

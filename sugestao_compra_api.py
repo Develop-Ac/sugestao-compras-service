@@ -14,6 +14,13 @@ import warnings
 ARQ_ENTRADA = "resultado_fifo_completo.xlsx"
 ARQ_SAIDA   = "resultado_fifo_sugestao.xlsx"
 
+# Configurações SQL Server
+SQL_SERVER_HOST = "192.168.1.146"
+SQL_SERVER_PORT = "1433"
+SQL_SERVER_DATABASE = "master"
+SQL_SERVER_USER = "BI_AC"
+SQL_SERVER_PASSWORD = "Ac@2025acesso"
+
 # Configurações PostgreSQL
 POSTGRES_URL = "postgresql://intranet:Ac%402025acesso@panel-teste.acacessorios.local:5555/intranet"
 TABELA_FIFO = "com_fifo_completo"
@@ -31,21 +38,80 @@ app = Flask(__name__)
 
 
 # ============================
-# CONEXÃO ODBC FIREBIRD
+# CONEXÃO SQL SERVER
 # ============================
 
 def get_connection():
+    """Conecta ao SQL Server com tratamento de erro melhorado"""
     conn_str = (
-        "DSN=CONSULTA;"
-        "UID=USER_CONSULTA;"
-        "PWD=Ac@2025acesso;"
+        f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+        f"SERVER={SQL_SERVER_HOST},{SQL_SERVER_PORT};"
+        f"DATABASE={SQL_SERVER_DATABASE};"
+        f"UID={SQL_SERVER_USER};"
+        f"PWD={SQL_SERVER_PASSWORD};"
+        f"TrustServerCertificate=yes;"
+        f"Encrypt=no;"
     )
-    return pyodbc.connect(conn_str)
+    
+    try:
+        print(f"Tentando conectar com SQL Server: {SQL_SERVER_HOST}:{SQL_SERVER_PORT}")
+        
+        # Verificar se drivers estão disponíveis
+        drivers = [driver for driver in pyodbc.drivers() if 'sql server' in driver.lower()]
+        print(f"Drivers SQL Server disponíveis: {drivers}")
+        
+        if not drivers:
+            print("ATENÇÃO: Nenhum driver SQL Server encontrado!")
+            print(f"Todos os drivers: {pyodbc.drivers()}")
+        
+        conn = pyodbc.connect(conn_str)
+        print("Conexão SQL Server estabelecida com sucesso!")
+        return conn
+        
+    except pyodbc.Error as e:
+        print(f"Erro de conexão SQL Server: {e}")
+        print(f"Host: {SQL_SERVER_HOST}:{SQL_SERVER_PORT}")
+        print(f"Database: {SQL_SERVER_DATABASE}")
+        print(f"User: {SQL_SERVER_USER}")
+        
+        raise e
+    except Exception as e:
+        print(f"Erro geral de conexão: {type(e).__name__}: {e}")
+        raise e
 
 
 def get_postgres_engine():
     """Cria engine do SQLAlchemy para PostgreSQL"""
     return create_engine(POSTGRES_URL)
+
+
+def executar_openquery(sql_interno):
+    """Executa uma consulta via OPENQUERY no SQL Server"""
+    conn = get_connection()
+    
+    # Escapa aspas simples na consulta interna
+    sql_interno_escaped = sql_interno.replace("'", "''")
+    
+    # Monta a consulta OPENQUERY
+    sql_openquery = f"""
+    SELECT * FROM OPENQUERY (
+        CONSULTA,
+        '{sql_interno_escaped}'
+    )
+    """
+    
+    try:
+        print(f"Executando OPENQUERY...")
+        print(f"SQL interno: {sql_interno[:200]}...")
+        df = pd.read_sql(sql_openquery, conn)
+        print(f"OPENQUERY executado com sucesso. {len(df)} registros retornados.")
+        return df
+    except Exception as e:
+        print(f"Erro no OPENQUERY: {e}")
+        print(f"SQL completo: {sql_openquery}")
+        raise e
+    finally:
+        conn.close()
 
 
 def carregar_analise_atual_postgres():
@@ -137,14 +203,14 @@ def carregar_analise_atual_postgres():
 
 def carregar_itens_pedido(pedido_cotacao, empresa, marca_descricao=None):
     """
-    Carrega os itens do Firebird aplicando filtros dinâmicos:
+    Carrega os itens usando OPENQUERY aplicando filtros dinâmicos:
       - pedido_cotacao: opcional (None = sem filtro)
       - empresa: obrigatório
       - marca_descricao: opcional, filtra mar.mar_descricao com LIKE case-insensitive
     """
-    conn = get_connection()
-
-    sql = """
+    
+    # Monta a consulta SQL interna para OPENQUERY
+    sql_interno = f"""
         SELECT
             pedi.pedido_cotacao,
             pedi.pro_codigo,
@@ -157,21 +223,19 @@ def carregar_itens_pedido(pedido_cotacao, empresa, marca_descricao=None):
         LEFT JOIN marcas mar
             ON mar.empresa    = pro.empresa
             AND mar.mar_codigo = pro.mar_codigo
-        WHERE pedi.empresa = ?
+        WHERE pedi.empresa = {empresa}
     """
 
-    params = [empresa]
-
     if pedido_cotacao is not None:
-        sql += "\n          AND pedi.pedido_cotacao = ?"
-        params.append(pedido_cotacao)
+        sql_interno += f"\n          AND pedi.pedido_cotacao = {pedido_cotacao}"
 
     if marca_descricao:
-        sql += "\n          AND UPPER(mar.mar_descricao) LIKE ?"
-        params.append(f"%{marca_descricao.upper()}%")
+        # Escapa aspas simples para OPENQUERY
+        marca_escaped = marca_descricao.replace("'", "''")
+        sql_interno += f"\n          AND UPPER(mar.mar_descricao) LIKE '%{marca_escaped.upper()}%'"
 
-    df_ped = pd.read_sql(sql, conn, params=params)
-    conn.close()
+    # Executa via OPENQUERY
+    df_ped = executar_openquery(sql_interno)
 
     # Converte PRO_CODIGO para string ANTES de qualquer operação
     if 'pro_codigo' in df_ped.columns:
@@ -316,6 +380,59 @@ def api_sugestao_compra():
 
 
 # Adicionar endpoint de teste para verificar se a API está funcionando
+@app.route('/diagnostico', methods=['GET'])
+def diagnostico():
+    """Endpoint para diagnóstico de conectividade"""
+    diagnostico_result = {
+        "timestamp": pd.Timestamp.now().isoformat(),
+        "sql_server": {"status": "error", "message": "", "drivers": []},
+        "postgresql": {"status": "error", "message": ""},
+        "odbc_dsns": {}
+    }
+    
+    # Teste SQL Server
+    try:
+        # Verificar drivers disponíveis
+        all_drivers = pyodbc.drivers()
+        sql_server_drivers = [d for d in all_drivers if 'sql server' in d.lower()]
+        diagnostico_result["sql_server"]["drivers"] = sql_server_drivers
+        
+        # Tentar conexão
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        diagnostico_result["sql_server"]["status"] = "ok"
+        diagnostico_result["sql_server"]["message"] = f"Conexão SQL Server OK - {SQL_SERVER_HOST}:{SQL_SERVER_PORT}"
+        
+    except Exception as e:
+        diagnostico_result["sql_server"]["message"] = f"Erro SQL Server: {str(e)}"
+    
+    # Teste PostgreSQL
+    try:
+        engine = get_postgres_engine()
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1"))
+            result.fetchone()
+        
+        diagnostico_result["postgresql"]["status"] = "ok"
+        diagnostico_result["postgresql"]["message"] = "Conexão PostgreSQL OK"
+        
+    except Exception as e:
+        diagnostico_result["postgresql"]["message"] = f"Erro PostgreSQL: {str(e)}"
+    
+    # Listar DSNs disponíveis
+    try:
+        diagnostico_result["odbc_dsns"] = dict(pyodbc.dataSources())
+    except Exception as e:
+        diagnostico_result["odbc_dsns"] = {"error": str(e)}
+    
+    return jsonify(diagnostico_result)
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
