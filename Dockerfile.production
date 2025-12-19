@@ -1,0 +1,54 @@
+FROM python:3.11-slim
+
+# Metadados
+LABEL maintainer="Sistema FIFO"
+LABEL description="API de Sugestão de Compra com dados do PostgreSQL"
+
+# Argumentos de build
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Definir diretório de trabalho
+WORKDIR /app
+
+# Criar usuário não-root para segurança
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Instalar dependências do sistema
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copiar e instalar dependências Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copiar código da aplicação
+COPY sugestao_compra_api.py .
+
+# Criar diretório de logs e dar permissões
+RUN mkdir -p /app/logs && \
+    chown -R appuser:appuser /app
+
+# Mudar para usuário não-root
+USER appuser
+
+# Expor a porta da aplicação
+EXPOSE 5000
+
+# Variáveis de ambiente
+ENV FLASK_APP=sugestao_compra_api.py
+ENV FLASK_ENV=production
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
+
+# Comando para executar a aplicação com gunicorn em produção
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120", "--keep-alive", "2", "--max-requests", "1000", "--max-requests-jitter", "50", "sugestao_compra_api:app"]
