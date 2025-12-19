@@ -117,60 +117,51 @@ def executar_openquery(sql_interno):
 
 def carregar_analise_atual_postgres():
     """
-    Carrega os dados mais recentes do tipo 'ANALISE_ATUAL' do PostgreSQL
+    Carrega todos os dados da tabela com_fifo_completo do PostgreSQL
     """
     try:
         engine = get_postgres_engine()
         
-        # Query para pegar a análise mais recente
+        # Query simples para pegar todos os dados
         query = """
         SELECT * FROM com_fifo_completo 
-        WHERE tipo_dados = 'ANALISE_ATUAL'
-        AND data_processamento = (
-            SELECT MAX(data_processamento) 
-            FROM com_fifo_completo 
-            WHERE tipo_dados = 'ANALISE_ATUAL'
-        )
         ORDER BY pro_codigo
         """
         
         df = pd.read_sql(query, engine)
         
         if df.empty:
-            print("Nenhum dado encontrado na tabela com_fifo_completo do tipo ANALISE_ATUAL")
+            print("Nenhum dado encontrado na tabela com_fifo_completo")
             return None
         
-        print(f"Carregados {len(df)} registros da análise FIFO mais recente do PostgreSQL")
-        print(f"Data do processamento: {df['data_processamento'].iloc[0]}")
+        print(f"Carregados {len(df)} registros da análise FIFO do PostgreSQL")
         
         # Mapeia as colunas do banco para o formato esperado pela API
         column_mapping = {
             'pro_codigo': 'PRO_CODIGO',
             'pro_descricao': 'PRO_DESCRICAO',
-            'subgrp_codigo': 'SUBGRP_CODIGO',
             'mar_descricao': 'MAR_DESCRICAO',
             'fornecedor1': 'FORNECEDOR1',
             'fornecedor2': 'FORNECEDOR2',
             'fornecedor3': 'FORNECEDOR3',
             'estoque_disponivel': 'ESTOQUE_DISPONIVEL',
-            'valor_custo_unitario': 'VALOR_CUSTO_UNITARIO',
-            'valor_total_custo': 'VALOR_TOTAL_CUSTO',
-            'qtd_vendida_periodo': 'QTD_VENDIDA_PERIODO',
-            'valor_vendido_periodo': 'VALOR_VENDIDO_PERIODO',
-            'data_ultima_venda': 'DATA_ULTIMA_VENDA',
-            'margem_lucro': 'MARGEM_LUCRO',
-            'giro_estoque': 'GIRO_ESTOQUE',
-            'abc_vendas': 'ABC_VENDAS',
-            'abc_estoque': 'ABC_ESTOQUE',
-            'abc_margem': 'ABC_MARGEM',
-            'classificacao_geral': 'CLASSIFICACAO_GERAL',
-            'recomendacao': 'RECOMENDACAO'
+            'qtd_vendida': 'QTD_VENDIDA_PERIODO',
+            'valor_vendido': 'VALOR_VENDIDO_PERIODO',
+            'data_max_venda': 'DATA_ULTIMA_VENDA',
+            'curva_abc': 'ABC_VENDAS',
+            'demanda_media_dia': 'DEMANDA_MEDIA_DIA',
+            'demanda_media_dia_ajustada': 'DEMANDA_MEDIA_DIA_AJUSTADA',
+            'estoque_min_sugerido': 'ESTOQUE_MIN_SUGERIDO',
+            'estoque_max_sugerido': 'ESTOQUE_MAX_SUGERIDO',
+            'tipo_planejamento': 'TIPO_PLANEJAMENTO',
+            'alerta_tendencia_alta': 'ALERTA_TENDENCIA_ALTA',
+            'num_vendas': 'NUM_VENDAS'
         }
         
         # Renomeia as colunas
         df = df.rename(columns=column_mapping)
         
-        # Remove colunas de controle que não são necessárias para a análise
+        # Remove colunas de controle que não são necessárias para a análise (se existirem)
         columns_to_remove = ['id', 'data_processamento', 'tipo_dados', 'created_at']
         df = df.drop(columns=[col for col in columns_to_remove if col in df.columns], errors='ignore')
         
@@ -178,53 +169,38 @@ def carregar_analise_atual_postgres():
         if 'PRO_CODIGO' in df.columns:
             df['PRO_CODIGO'] = df['PRO_CODIGO'].astype(str)
         
-        # Calcular estoques mínimo e máximo baseado nos dados disponíveis
-        # Se não temos dados específicos, usar uma lógica baseada no giro e vendas
-        if 'QTD_VENDIDA_PERIODO' in df.columns and 'GIRO_ESTOQUE' in df.columns:
-            # Calcular demanda média diária aproximada (assumindo período de 90 dias)
-            df['DEMANDA_MEDIA_DIA'] = df['QTD_VENDIDA_PERIODO'] / 90
-            df['DEMANDA_MEDIA_DIA_AJUSTADA'] = df['DEMANDA_MEDIA_DIA']
-            
-            # Calcular estoque mínimo: 15 dias de demanda (lead time + segurança)
-            df['ESTOQUE_MIN_SUGERIDO'] = (df['DEMANDA_MEDIA_DIA'] * 15).round().astype(int)
-            
-            # Calcular estoque máximo baseado no parâmetro DIAS_COMPRA_USER ou padrão
-            dias_estoque = DIAS_ESTOQUE_DESEJADO + LEAD_TIME_DIAS  # 90 + 17 = 107 dias
-            df['ESTOQUE_MAX_SUGERIDO'] = (df['DEMANDA_MEDIA_DIA'] * dias_estoque).round().astype(int)
-            
-            print(f"Calculados estoques min/max baseados na demanda do período")
-        else:
-            print("ATENÇÃO: Não foi possível calcular estoques min/max - dados insuficientes")
-            df['DEMANDA_MEDIA_DIA'] = 0
-            df['DEMANDA_MEDIA_DIA_AJUSTADA'] = 0
-            df['ESTOQUE_MIN_SUGERIDO'] = 0
-            df['ESTOQUE_MAX_SUGERIDO'] = 0
+        # Garantir que temos as colunas essenciais preenchidas
+        if 'DEMANDA_MEDIA_DIA' not in df.columns:
+            df['DEMANDA_MEDIA_DIA'] = df.get('demanda_media_dia', 0)
         
-        # Adicionar outras colunas que podem estar faltando
-        other_columns = {
-            'TIPO_PLANEJAMENTO': 'Normal',
-            'ALERTA_TENDENCIA_ALTA': 'Não', 
-            'CURVA_ABC': 'C',
-            'NUM_VENDAS': 0
-        }
+        if 'DEMANDA_MEDIA_DIA_AJUSTADA' not in df.columns:
+            df['DEMANDA_MEDIA_DIA_AJUSTADA'] = df.get('demanda_media_dia_ajustada', df.get('DEMANDA_MEDIA_DIA', 0))
         
-        for col, default_value in other_columns.items():
-            if col not in df.columns:
-                df[col] = default_value
-                print(f"Adicionada coluna {col} com valor padrão: {default_value}")
+        if 'ESTOQUE_MIN_SUGERIDO' not in df.columns:
+            df['ESTOQUE_MIN_SUGERIDO'] = df.get('estoque_min_sugerido', 0)
+        
+        if 'ESTOQUE_MAX_SUGERIDO' not in df.columns:
+            df['ESTOQUE_MAX_SUGERIDO'] = df.get('estoque_max_sugerido', 0)
+        
+        if 'TIPO_PLANEJAMENTO' not in df.columns:
+            df['TIPO_PLANEJAMENTO'] = df.get('tipo_planejamento', 'Normal')
+        
+        if 'ALERTA_TENDENCIA_ALTA' not in df.columns:
+            df['ALERTA_TENDENCIA_ALTA'] = df.get('alerta_tendencia_alta', 'Não')
+        
+        if 'NUM_VENDAS' not in df.columns:
+            df['NUM_VENDAS'] = df.get('num_vendas', 0)
         
         # Mapear classificação ABC se disponível
-        if 'ABC_VENDAS' in df.columns:
-            df['CURVA_ABC'] = df['ABC_VENDAS'].fillna('C')
+        if 'ABC_VENDAS' not in df.columns and 'curva_abc' in df.columns:
+            df['ABC_VENDAS'] = df['curva_abc']
+        
+        if 'CURVA_ABC' not in df.columns:
+            df['CURVA_ABC'] = df.get('ABC_VENDAS', 'C').fillna('C')
             print("Mapeado CURVA_ABC baseado em ABC_VENDAS")
         
-        # Definir alerta de tendência alta baseado no giro de estoque
-        if 'GIRO_ESTOQUE' in df.columns:
-            # Se giro > 4 (gira mais de 4x no ano), considera tendência alta
-            df['ALERTA_TENDENCIA_ALTA'] = df['GIRO_ESTOQUE'].apply(
-                lambda x: 'Sim' if pd.notna(x) and x > 4 else 'Não'
-            )
-            print("Calculado ALERTA_TENDENCIA_ALTA baseado no giro de estoque")
+        print(f"Estrutura final: {len(df)} registros com {len(df.columns)} colunas")
+        print(f"Colunas principais: {list(df.columns)[:10]}...")  # Mostra primeiras 10 colunas
         
         return df
         
