@@ -25,7 +25,7 @@ const (
 
 // Configurações PostgreSQL
 var (
-	POSTGRES_URL = "postgresql://intranet:Ac%402025acesso@panel-teste.acacessorios.local:5555/intranet"
+	POSTGRES_URL = "postgresql://intranet:Ac%402025acesso@panel-teste.acacessorios.local:5555/intranet?sslmode=disable"
 	TABELA_FIFO  = "com_fifo_completo"
 )
 
