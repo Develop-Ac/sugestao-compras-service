@@ -1,47 +1,63 @@
-# Build stage
+# Production Dockerfile for Go API
 FROM golang:1.21-alpine AS builder
 
-# Instalar dependências necessárias
-RUN apk add --no-cache git
+# Set Go environment
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GOARCH=amd64
+ENV GOPROXY=https://proxy.golang.org,direct
+ENV GOSUMDB=sum.golang.org
 
-# Definir diretório de trabalho
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+# Set working directory
 WORKDIR /app
 
-# Copiar arquivos de dependências
-COPY go.mod ./
+# Copy source files
+COPY main.go ./
 
-# Download das dependências (go.sum será regenerado automaticamente)
-RUN go mod download
+# Initialize go module and install dependencies
+# This avoids checksum issues by starting fresh
+RUN go mod init sugestao-compra-api && \
+    go get github.com/gin-gonic/gin@v1.9.1 && \
+    go get github.com/lib/pq@v1.10.9 && \
+    go mod tidy
 
-# Copiar código fonte
-COPY main.go .
-
-# Build da aplicação
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+# Build the application
+RUN go build -a -installsuffix cgo -ldflags '-w -s' -o main main.go
 
 # Production stage
 FROM alpine:latest
 
-# Instalar ca-certificates para HTTPS
-RUN apk --no-cache add ca-certificates tzdata
+# Install runtime dependencies
+RUN apk --no-cache add ca-certificates tzdata wget
 
-# Criar usuário não-root
+# Create non-root user
 RUN addgroup -g 1001 -S appgroup && \
     adduser -u 1001 -S appuser -G appgroup
 
-WORKDIR /root/
+# Set working directory
+WORKDIR /app
 
-# Copiar o binário do stage anterior
-COPY --from=builder /app/main .
+# Copy binary from builder
+COPY --from=builder /app/main ./main
 
-# Definir ownership
-RUN chown appuser:appgroup main
+# Change ownership
+RUN chown appuser:appgroup main && chmod +x main
 
-# Mudar para usuário não-root
+# Switch to non-root user
 USER appuser
 
-# Expor porta
+# Set timezone
+ENV TZ=America/Sao_Paulo
+
+# Expose port
 EXPOSE 8080
 
-# Comando para executar a aplicação
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1
+
+# Run the application
 CMD ["./main"]

@@ -1,0 +1,62 @@
+# Alternative Dockerfile for production builds
+# This version handles checksum issues better
+
+FROM golang:1.21-alpine AS builder
+
+# Set environment variables for Go modules
+ENV CGO_ENABLED=0
+ENV GOOS=linux
+ENV GOARCH=amd64
+ENV GOPROXY=https://proxy.golang.org,direct
+ENV GOSUMDB=sum.golang.org
+
+# Install dependencies
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    tzdata
+
+# Create non-root user for build
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+# Set working directory
+WORKDIR /app
+
+# Copy source code
+COPY . .
+
+# Change ownership
+RUN chown -R appuser:appgroup /app
+USER appuser
+
+# Clean and initialize Go modules
+RUN go clean -modcache && \
+    go mod init sugestao-compra-api || true && \
+    go mod tidy
+
+# Add required dependencies
+RUN go get github.com/gin-gonic/gin@v1.9.1 && \
+    go get github.com/lib/pq@v1.10.9
+
+# Build the application
+RUN go build -a -installsuffix cgo -ldflags '-w -s -extldflags "-static"' -o main main.go
+
+# Production stage - using minimal scratch image
+FROM scratch
+
+# Copy certificates and timezone data
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+
+# Copy the binary
+COPY --from=builder /app/main /main
+
+# Set timezone
+ENV TZ=America/Sao_Paulo
+
+# Expose port
+EXPOSE 8080
+
+# Run the application
+ENTRYPOINT ["/main"]
