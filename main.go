@@ -399,12 +399,14 @@ func setupRoutes(db *sql.DB) *gin.Engine {
 	})
 	
 	// Health check
-	r.GET("/health", func(c *gin.Context) {
+	healthHandler := func(c *gin.Context) {
 		c.JSON(200, HealthResponse{
 			Status:    "ok",
 			Timestamp: time.Now().Format(time.RFC3339),
 		})
-	})
+	}
+	r.GET("/health", healthHandler)
+	r.HEAD("/health", healthHandler)
 	
 	// Função auxiliar para processar sugestão de compra
 	processarSugestaoCompra := func(c *gin.Context) {
