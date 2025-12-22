@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -405,14 +406,33 @@ func setupRoutes(db *sql.DB) *gin.Engine {
 		})
 	})
 	
-	// Endpoint principal de sugestão de compra
-	r.POST("/sugestao-compra", func(c *gin.Context) {
+	// Função auxiliar para processar sugestão de compra
+	processarSugestaoCompra := func(c *gin.Context) {
 		var req SugestaoRequest
 		
-		// Parse do JSON (opcional)
-		if err := c.ShouldBindJSON(&req); err != nil {
-			// Se não conseguir fazer parse, usar valores padrão
-			req = SugestaoRequest{}
+		// Para POST: Parse do JSON
+		if c.Request.Method == "POST" {
+			if err := c.ShouldBindJSON(&req); err != nil {
+				// Se não conseguir fazer parse, usar valores padrão
+				req = SugestaoRequest{}
+			}
+		}
+		
+		// Para GET: Parse query parameters
+		if c.Request.Method == "GET" {
+			if pedidoCotacao := c.Query("pedido_cotacao"); pedidoCotacao != "" {
+				if pedidoInt, err := strconv.Atoi(pedidoCotacao); err == nil {
+					req.PedidoCotacao = &pedidoInt
+				}
+			}
+			if marcaDescricao := c.Query("marca_descricao"); marcaDescricao != "" {
+				req.MarcaDescricao = &marcaDescricao
+			}
+			if diasCompraStr := c.Query("dias_compra"); diasCompraStr != "" {
+				if diasCompraInt, err := strconv.Atoi(diasCompraStr); err == nil {
+					req.DiasCompra = &diasCompraInt
+				}
+			}
 		}
 		
 		// Definir valores padrão
@@ -463,7 +483,11 @@ func setupRoutes(db *sql.DB) *gin.Engine {
 			Data:    produtosComSugestao,
 			Message: fmt.Sprintf("Sugestão gerada com sucesso. %d produtos.", len(produtosComSugestao)),
 		})
-	})
+	}
+	
+	// Endpoint principal de sugestão de compra - POST e GET
+	r.POST("/sugestao-compra", processarSugestaoCompra)
+	r.GET("/sugestao-compra", processarSugestaoCompra)
 	
 	// Endpoint de diagnóstico (sem tentar conectar SQL Server)
 	r.GET("/diagnostico", func(c *gin.Context) {
