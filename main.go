@@ -175,6 +175,8 @@ func carregarAnaliseAtualPostgreSQL(db *sql.DB) ([]ProdutoFIFO, error) {
 			produto.DataUltimaVenda = &dataMaxVenda.Time
 		}
 		
+		produto.ProCodigo = strings.TrimSpace(produto.ProCodigo)
+		
 		produtos = append(produtos, produto)
 	}
 	
