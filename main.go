@@ -45,6 +45,7 @@ type ProdutoFIFO struct {
 	ProCodigo                string  `json:"pro_codigo"`
 	ProDescricao             string  `json:"pro_descricao"`
 	MarDescricao             string  `json:"mar_descricao"`
+	SgrCodigo                int     `json:"sgr_codigo"`
 	Fornecedor1              string  `json:"fornecedor1"`
 	Fornecedor2              string  `json:"fornecedor2"`
 	Fornecedor3              string  `json:"fornecedor3"`
@@ -112,6 +113,7 @@ func carregarAnaliseAtualPostgreSQL(db *sql.DB) ([]ProdutoFIFO, error) {
 			COALESCE(pro_codigo, '') as pro_codigo,
 			COALESCE(pro_descricao, '') as pro_descricao,
 			COALESCE(mar_descricao, '') as mar_descricao,
+			COALESCE(sgr_codigo, 0) as sgr_codigo,
 			COALESCE(fornecedor1, '') as fornecedor1,
 			COALESCE(fornecedor2, '') as fornecedor2,
 			COALESCE(fornecedor3, '') as fornecedor3,
@@ -147,6 +149,7 @@ func carregarAnaliseAtualPostgreSQL(db *sql.DB) ([]ProdutoFIFO, error) {
 			&produto.ProCodigo,
 			&produto.ProDescricao,
 			&produto.MarDescricao,
+			&produto.SgrCodigo,
 			&produto.Fornecedor1,
 			&produto.Fornecedor2,
 			&produto.Fornecedor3,
@@ -199,22 +202,17 @@ func aplicarArredondamento(valor float64, curva string) int {
 }
 
 func calcularSugestaoPura(estoque float64, estoqueMinCalc, estoqueMaxCalc int, tipo, alerta, curva string) int {
-	// Sob demanda: não sugere automático
-	if tipo == "Sob_Demanda" {
-		return 0
-	}
-	
-	// Se nem máximo faz sentido (0 ou negativo), não sugere
+	// 2) Se nem máximo faz sentido (0 ou negativo), não sugere
 	if estoqueMaxCalc <= 0 {
 		return 0
 	}
 	
-	// Se já está no máximo ou acima, não sugere
+	// 3) Se já está no máximo ou acima, não sugere
 	if estoque >= float64(estoqueMaxCalc) {
 		return 0
 	}
 	
-	// Complementar até o máximo alvo
+	// 4) Complementar até o máximo alvo
 	base := float64(estoqueMaxCalc) - estoque
 	if base < 0 {
 		base = 0
@@ -237,7 +235,7 @@ func sugerirCompra(produto ProdutoFIFO, diasCompraUser int) SugestaoCompra {
 	tipo := produto.TipoPlanejamento
 	alerta := produto.AlertaTendenciaAlta
 	curva := produto.CurvaABC
-	demanda := produto.DemandaMediaDiaAjustada
+	sgr := produto.SgrCodigo
 	
 	// Se os parâmetros de política (min/máx) estiverem faltando
 	if estoqueMin == 0 && estoqueMax == 0 {
@@ -256,9 +254,39 @@ func sugerirCompra(produto ProdutoFIFO, diasCompraUser int) SugestaoCompra {
 	estoqueMinCalc := estoqueMin
 	estoqueMaxCalc := estoqueMax
 	
-	if diasCompraUser > 0 && demanda > 0 {
-		// Sobrescreve o Máximo com base na demanda diária * dias solicitados
-		estoqueMaxCalc = int(math.Ceil(demanda * float64(diasCompraUser)))
+	// Exceção 1: Sob Demanda
+	// "se for 'sob_demanda' deve sempre trazer o estoque maximo sugerido independente dos dias de cobertura"
+	if strings.TrimSpace(tipo) == "Sob_Demanda" {
+		// Mantém originais, ignora diasCompraUser
+	} else {
+		// Lógica de Escala se houver input de dias
+		if diasCompraUser > 0 {
+			// Determinar dias de referência da curva (Max Days)
+			refDias := 60 // Default A
+			
+			// Map de dias por curva
+			var refDiasMap map[string]int
+			if sgr == 154 {
+				refDiasMap = map[string]int{"A": 120, "B": 180, "C": 240, "D": 120}
+			} else {
+				refDiasMap = map[string]int{"A": 60, "B": 90, "C": 120, "D": 45}
+			}
+			
+			if val, ok := refDiasMap[curva]; ok {
+				refDias = val
+			}
+			
+			fatorEscala := float64(diasCompraUser) / float64(refDias)
+			
+			estoqueMinCalc = int(math.Ceil(float64(estoqueMin) * fatorEscala))
+			estoqueMaxCalc = int(math.Ceil(float64(estoqueMax) * fatorEscala))
+			
+			// Exceção 2: Pouco Histórico -> divide pela metade
+			if strings.TrimSpace(tipo) == "Pouco_Historico" {
+				estoqueMinCalc = int(math.Ceil(float64(estoqueMinCalc) / 2.0))
+				estoqueMaxCalc = int(math.Ceil(float64(estoqueMaxCalc) / 2.0))
+			}
+		}
 	}
 	
 	// Garantir coerência min <= max
@@ -270,8 +298,12 @@ func sugerirCompra(produto ProdutoFIFO, diasCompraUser int) SugestaoCompra {
 	sugestaoPura := calcularSugestaoPura(estoque, estoqueMinCalc, estoqueMaxCalc, tipo, alerta, curva)
 	
 	// Casos especiais de política
-	if tipo == "Sob_Demanda" {
+	if strings.TrimSpace(tipo) == "Sob_Demanda" {
 		motivo := fmt.Sprintf("Sob Demanda. Est: %.0f. Sem sugestão auto.", estoque)
+		// Aparentemente o user quer "trazer o estoque maximo sugerido"
+		// mas como Sugestão? "trazer o estoque maximo sugerido... por se tratarem de compras casadas".
+		// Se é compra casada, a sugestão automática é zero, pois só se compra quando vende.
+		// Vou manter a lógica original que retorna 0 para Sob_Demanda mas mostra motivo.
 		return SugestaoCompra{
 			ProCodigo:         produto.ProCodigo,
 			QtdSugerida:       0,

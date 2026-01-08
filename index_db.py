@@ -85,6 +85,7 @@ def criar_tabela_postgres():
         pro_descricao TEXT,
         estoque_disponivel DECIMAL(15,4),
         mar_descricao VARCHAR(100),
+        sgr_codigo INTEGER,
         fornecedor1 VARCHAR(200),
         fornecedor2 VARCHAR(200),
         fornecedor3 VARCHAR(200),
@@ -108,6 +109,16 @@ def criar_tabela_postgres():
     CREATE INDEX IF NOT EXISTS idx_com_fifo_pro_codigo ON com_fifo_completo (pro_codigo);
     CREATE INDEX IF NOT EXISTS idx_com_fifo_curva_abc ON com_fifo_completo (curva_abc);
     CREATE INDEX IF NOT EXISTS idx_com_fifo_categoria_estocagem ON com_fifo_completo (categoria_estocagem);
+    
+    -- Migração automática: Adicionar sgr_codigo se não existir (para tabelas antigas)
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_name='com_fifo_completo' AND column_name='sgr_codigo') THEN
+            ALTER TABLE com_fifo_completo ADD COLUMN sgr_codigo INTEGER;
+        END IF;
+    END
+    $$;
     """
     
     try:
@@ -1285,7 +1296,9 @@ def salvar_metricas_postgres(df_metricas):
         'DEMANDA_MEDIA_DIA_AJUSTADA': 'demanda_media_dia_ajustada',
         'PRO_DESCRICAO': 'pro_descricao',
         'ESTOQUE_DISPONIVEL': 'estoque_disponivel',
+        'ESTOQUE_DISPONIVEL': 'estoque_disponivel',
         'MAR_DESCRICAO': 'mar_descricao',
+        'SGR_CODIGO': 'sgr_codigo',
         'FORNECEDOR1': 'fornecedor1',
         'FORNECEDOR2': 'fornecedor2',
         'FORNECEDOR3': 'fornecedor3',
@@ -1313,7 +1326,7 @@ def salvar_metricas_postgres(df_metricas):
         'valor_vendido', 'data_min_venda', 'data_max_venda', 'periodo_dias',
         'demanda_media_dia', 'num_vendas', 'vendas_ult_12m', 'vendas_12m_ant',
         'fator_tendencia', 'tendencia_label', 'dias_ruptura', 'demanda_media_dia_ajustada',
-        'pro_descricao', 'estoque_disponivel', 'mar_descricao', 'fornecedor1',
+        'pro_descricao', 'estoque_disponivel', 'mar_descricao', 'sgr_codigo', 'fornecedor1',
         'fornecedor2', 'fornecedor3', 'pct_acum_valor', 'curva_abc',
         'categoria_estocagem', 'estoque_min_base', 'estoque_max_base',
         'fator_ajuste_tendencia', 'estoque_min_ajustado', 'estoque_max_ajustado',

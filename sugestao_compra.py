@@ -231,15 +231,13 @@ def sugerir_compra(row):
     tipo     = row.get("TIPO_PLANEJAMENTO")
     alerta   = row.get("ALERTA_TENDENCIA_ALTA")
     curva    = row.get("CURVA_ABC")
-    tipo     = row.get("TIPO_PLANEJAMENTO")
-    alerta   = row.get("ALERTA_TENDENCIA_ALTA")
-    curva    = row.get("CURVA_ABC")
-    dem = row.get("DEMANDA_MEDIA_DIA_AJUSTADA", 0)
+    dem      = row.get("DEMANDA_MEDIA_DIA_AJUSTADA", 0)
+    sgr      = row.get("SGR_CODIGO")
+    
     if pd.isna(dem) or dem == 0:
         dem = row.get("DEMANDA_MEDIA_DIA", 0)
     qtd_ped  = row.get("QTD_PEDIDO", 0) or 0  # quantidade colocada no pedido (se houver)
     desc     = row.get("PRO_DESCRICAO", "")
-    # num_vend = row.get("NUM_VENDAS", np.nan)
 
     # Se o estoque atual estiver em branco, trata como 0 (sem estoque)
     if pd.isna(est):
@@ -265,16 +263,41 @@ def sugerir_compra(row):
     # ============================
     # Cálculo de estoque alvo (min/max)
     # ============================
-
-    # Portanto, não recalculamos com "LEAD_TIME_DIAS" nem "DIAS_ESTOQUE_DESEJADO" extra.
-    # Usamos estritamente o que veio da análise, A MENOS QUE o usuário tenha definido DIAS_COMPRA_USER > 0
-    est_min_calc = int(est_min0)
     
-    if DIAS_COMPRA_USER and DIAS_COMPRA_USER > 0 and dem > 0:
-        # Sobrescreve o Maximo com base na demanda diaria * dias solicitados
-        est_max_calc = int(np.ceil(dem * DIAS_COMPRA_USER))
+    est_min_orig = int(est_min0)
+    est_max_orig = int(est_max0)
+    
+    est_min_calc = est_min_orig
+    est_max_calc = est_max_orig
+
+    # Exceção 1: Sob Demanda
+    if ml_tipo := str(tipo).strip() == "Sob_Demanda":
+        # Mantém originais, ignora DIAS_COMPRA_USER
+        pass
     else:
-        est_max_calc = int(est_max0)
+        # Lógica de Escala
+        if DIAS_COMPRA_USER and DIAS_COMPRA_USER > 0:
+            
+            # Determinar dias de referência da curva (Max Days)
+            # Default: A=60, B=90, C=120, D=45
+            # 154: A=120, B=180, C=240, D=120
+            
+            if sgr == 154:
+                ref_dias_map = {"A": 120, "B": 180, "C": 240, "D": 120}
+            else:
+                ref_dias_map = {"A": 60, "B": 90, "C": 120, "D": 45}
+            
+            ref_dias = ref_dias_map.get(curva, 60) # fallback A=60
+            
+            fator_escala = DIAS_COMPRA_USER / ref_dias
+            
+            est_min_calc = int(np.ceil(est_min_orig * fator_escala))
+            est_max_calc = int(np.ceil(est_max_orig * fator_escala))
+            
+            # Exceção 2: Pouco Histórico -> divide pela metade
+            if str(tipo).strip() == "Pouco_Historico":
+                est_min_calc = int(np.ceil(est_min_calc / 2.0))
+                est_max_calc = int(np.ceil(est_max_calc / 2.0))
 
     # Garantir coerência min <= max
     if est_max_calc < est_min_calc:
